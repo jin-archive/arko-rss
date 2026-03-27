@@ -18,6 +18,8 @@ chrome_options = Options()
 chrome_options.add_argument('--headless')
 chrome_options.add_argument('--no-sandbox')
 chrome_options.add_argument('--disable-dev-shm-usage')
+# 모바일 모드로 인식되어 날짜 열이 숨겨지는 것을 방지하기 위해 PC 해상도 고정
+chrome_options.add_argument('--window-size=1920,1080') 
 chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
 
 service = Service(ChromeDriverManager().install())
@@ -25,7 +27,7 @@ driver = webdriver.Chrome(service=service, options=chrome_options)
 
 print("웹페이지에 접속하여 자바스크립트 렌더링을 기다립니다...")
 driver.get(url)
-time.sleep(5)  # 데이터가 화면에 그려질 때까지 5초 대기
+time.sleep(8)  # 로딩이 느릴 수 있으므로 넉넉하게 8초 대기
 
 html = driver.page_source
 soup = BeautifulSoup(html, 'html.parser')
@@ -40,7 +42,6 @@ fg.link(href=url, rel='alternate')
 fg.description('아르코예술기록원의 최신 공지사항을 제공합니다.')
 fg.language('ko')
 
-# <a> 태그를 모두 찾아서 게시글 형태인 것만 걸러내기
 links = soup.find_all('a')
 added_links = set()
 items_found = 0
@@ -49,22 +50,26 @@ for a in links:
     href = a.get('href', '')
     title = a.get_text(separator=' ', strip=True)
     
-    # 너무 짧은 링크나 메뉴 링크는 건너뜀
+    # 의미 없는 링크 패스
     if not href or len(title) < 5 or title in ['이전 페이지', '다음 페이지', '본문 바로가기', '주메뉴 바로가기']:
         continue
-    if href == '#' and not a.get('onclick'):
-        continue
 
-    # 해당 링크를 감싸고 있는 부모 태그(보통 행 역할을 함)를 찾아 날짜를 추출
-    parent = a.find_parent(['tr', 'li', 'div', 'ul'])
+    # -----------------------------------
+    # 핵심 개선: 날짜 찾기 로직 (5단계 상위 부모까지 넓게 탐색)
+    # -----------------------------------
     date_str = ""
-    if parent:
-        # 2026-02-19 형태의 텍스트 찾기
-        date_match = re.search(r'20\d{2}-\d{2}-\d{2}', parent.get_text())
+    curr_parent = a.parent
+    for _ in range(5): 
+        if not curr_parent:
+            break
+        # 현재 그룹 안에서 2026-02-19 또는 2026.02.19 형태의 날짜 찾기
+        date_match = re.search(r'20\d{2}[-./]\d{2}[-./]\d{2}', curr_parent.get_text(separator=' '))
         if date_match:
-            date_str = date_match.group()
+            date_str = date_match.group().replace('.', '-').replace('/', '-')
+            break
+        curr_parent = curr_parent.parent # 못 찾으면 한 단계 더 큰 컨테이너로 이동
             
-    # 게시글 목록이라면 반드시 날짜가 있으므로, 날짜가 없는 링크는 무시
+    # 아무리 부모를 뒤져도 날짜가 없으면 게시판 목록이 아니므로 패스
     if not date_str:
         continue
         
@@ -86,7 +91,7 @@ for a in links:
         continue
     added_links.add(link)
 
-    # 항목 추가 (들어오는 순서대로 차곡차곡)
+    # 항목 추가
     fe = fg.add_entry(order='append') 
     fe.id(link)
     fe.title(title)
